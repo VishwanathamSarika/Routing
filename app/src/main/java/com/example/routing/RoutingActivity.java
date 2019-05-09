@@ -1,7 +1,9 @@
 package com.example.routing;
 
+import android.app.Activity;
 import android.content.Context;
 import android.content.Intent;
+import android.database.Cursor;
 import android.graphics.Color;
 import android.net.Uri;
 import android.os.AsyncTask;
@@ -11,10 +13,16 @@ import android.os.Bundle;
 import android.support.annotation.Nullable;
 import android.util.Log;
 import android.view.View;
+import android.widget.Adapter;
 import android.widget.AdapterView;
 import android.widget.ArrayAdapter;
 import android.widget.AutoCompleteTextView;
 import android.widget.Button;
+import android.widget.AdapterView;
+import android.widget.ArrayAdapter;
+import android.widget.ListAdapter;
+import android.widget.ListView;
+
 
 import com.example.routing.RoutingHelpers.FetchURL;
 import com.google.android.gms.maps.GoogleMap;
@@ -38,6 +46,8 @@ import android.support.v4.app.ActivityCompat;
 import android.support.v4.content.ContextCompat;
 import android.widget.Filter;
 import android.widget.Filterable;
+import android.widget.ListAdapter;
+import android.widget.ListView;
 import android.widget.RelativeLayout;
 import android.widget.Toast;
 
@@ -52,6 +62,12 @@ import com.google.android.gms.location.LocationListener;
 
 
 import com.example.routing.RoutingHelpers.TaskLoadedCallback;
+import com.google.firebase.database.DatabaseReference;
+import com.google.firebase.database.FirebaseDatabase;
+
+import java.sql.Timestamp;
+import java.util.Date;
+
 
 import org.json.JSONArray;
 import org.json.JSONException;
@@ -84,16 +100,22 @@ public class RoutingActivity extends AppCompatActivity implements OnItemClickLis
     Location mLastLocation;
     Marker mCurrLocationMarker;
     LocationRequest mLocationRequest;
-    double latitude=0, longitude=0;
+    double latitude = 0, longitude = 0;
     GoogleMap mMap;
     Marker sourceMarker = null, destMarker = null;
     Button getDirection;
     private Polyline currentPolyline;
-    HashMap<String,MarkerOptions> hashMapMarker;
+    HashMap<String, MarkerOptions> hashMapMarker;
     AutoCompleteTextView sourceAutoCompView, destAutoCompView;
-    String currLoc = "";
+    String currLoc = "", source = "", destination = "";
     String[] mPlaceType;
     Integer count;
+    DatabaseHelper mDatabaseHelper;
+    FirebaseDatabase database;
+    DatabaseReference databaseRef;
+    Lock lock;
+    Counter counter;
+    Integer[] estCount;
     //ListView nearbyHospList, nearbyPoliceList;
     //ArrayList<String> nearbyHospArray, nearbyPoliceArray;
     //HashMap<String, LatLng> hospitalNameToLatLngMap, policeNameToLatLngMap;
@@ -104,18 +126,27 @@ public class RoutingActivity extends AppCompatActivity implements OnItemClickLis
     private static final String OUT_JSON = "/json";
 
 
-
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_routing);
         getDirection = findViewById(R.id.btnGetDirection);
         hashMapMarker = new HashMap<>();
-        mPlaceType = new String[]{"hospital", "police_station" ,"bank", "mosque", "movie_theatre" ,"mall", "hindu_temple", "restaurant", "hotel", "store", "atm"};
+        mPlaceType = new String[]{"hospital", "police_station", "bank", "mosque", "movie_theatre", "mall", "hindu_temple", "restaurant", "hotel", "store", "atm"};
+        mDatabaseHelper = new DatabaseHelper(this);
+
+        lock = new Lock();
+        counter = new Counter();
+        estCount = new Integer[6];
+
+        database = FirebaseDatabase.getInstance();
+
+        /** Testing firebase **/
+
+        testFirebase();
 
 
-
-       sourceAutoCompView = findViewById(R.id.sourceAutoCompleteTextView);
+        sourceAutoCompView = findViewById(R.id.sourceAutoCompleteTextView);
         sourceAutoCompView.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
@@ -128,21 +159,22 @@ public class RoutingActivity extends AppCompatActivity implements OnItemClickLis
             @Override
             public void onItemClick(AdapterView adapterView, View view, int position, long id) {
                 String str = (String) adapterView.getItemAtPosition(position);
-                Toast.makeText(RoutingActivity.this,"Source: "+str , Toast.LENGTH_LONG).show();
+                source = str;
+                Toast.makeText(RoutingActivity.this, "Source: " + str, Toast.LENGTH_LONG).show();
                 getDirection.setVisibility(View.VISIBLE);
 
                 LatLng latLng = null;
                 try {
-                    if(str!="") {
+                    if (str != "") {
                         latLng = getLatLng(str);
                     }
                 } catch (IOException e) {
                     e.printStackTrace();
                 }
 
-                if(latLng!=null) {
+                if (latLng != null) {
 
-                    if(sourceMarker != null){
+                    if (sourceMarker != null) {
                         mMap.clear();
                         hashMapMarker.remove("source");
                         addAllMarkers();
@@ -150,7 +182,7 @@ public class RoutingActivity extends AppCompatActivity implements OnItemClickLis
 
                     }
 
-                    if(sourceMarker == null) {
+                    if (sourceMarker == null) {
 
                         MarkerOptions markerOptions = new MarkerOptions();
                         markerOptions.position(latLng);
@@ -185,23 +217,24 @@ public class RoutingActivity extends AppCompatActivity implements OnItemClickLis
             @Override
             public void onItemClick(AdapterView adapterView, View view, int position, long id) {
                 String str = (String) adapterView.getItemAtPosition(position);
-                Toast.makeText(RoutingActivity.this,"Destination: "+str , Toast.LENGTH_LONG).show();
+                destination = str;
+                Toast.makeText(RoutingActivity.this, "Destination: " + str, Toast.LENGTH_LONG).show();
 
                 //Making "Get route" button visible
                 getDirection.setVisibility(View.VISIBLE);
 
                 LatLng latLng = null;
                 try {
-                    if(str!="") {
+                    if (str != "") {
                         latLng = getLatLng(str);
                     }
                 } catch (IOException e) {
                     e.printStackTrace();
                 }
 
-                if(latLng!=null) {
+                if (latLng != null) {
 
-                    if(destMarker != null){
+                    if (destMarker != null) {
                         mMap.clear();
                         hashMapMarker.remove("destination");
                         addAllMarkers();
@@ -209,7 +242,7 @@ public class RoutingActivity extends AppCompatActivity implements OnItemClickLis
 
                     }
 
-                    if(destMarker == null) {
+                    if (destMarker == null) {
 
                         MarkerOptions markerOptions = new MarkerOptions();
                         markerOptions.position(latLng);
@@ -239,9 +272,8 @@ public class RoutingActivity extends AppCompatActivity implements OnItemClickLis
         if (!CheckGooglePlayServices()) {
             Log.d("onCreate", "Finishing test case since Google Play Services are not available");
             finish();
-        }
-        else {
-            Log.d("onCreate","Google Play Services available.");
+        } else {
+            Log.d("onCreate", "Google Play Services available.");
         }
 
         // Obtain the SupportMapFragment and get notified when the map is ready to be used.
@@ -267,15 +299,13 @@ public class RoutingActivity extends AppCompatActivity implements OnItemClickLis
                     new FetchURL(RoutingActivity.this).execute(getUrl(sourceMarker.getPosition(), destMarker.getPosition(), "driving"), "driving");
                     LatLng latLng = new LatLng(sourceMarker.getPosition().latitude, sourceMarker.getPosition().longitude);
                     mMap.animateCamera(CameraUpdateFactory.newLatLngZoom(latLng, 11));
-                }
-                else if(sourceMarker == null && destMarker!=null){
+                } else if (sourceMarker == null && destMarker != null) {
 
                     new FetchURL(RoutingActivity.this).execute(getUrl(mCurrLocationMarker.getPosition(), destMarker.getPosition(), "driving"), "driving");
                     LatLng latLng = new LatLng(latitude, longitude);
                     mMap.animateCamera(CameraUpdateFactory.newLatLngZoom(latLng, 11));
-                }
-                else{
-                    Toast.makeText(RoutingActivity.this,"Enter destination", Toast.LENGTH_LONG).show();
+                } else {
+                    Toast.makeText(RoutingActivity.this, "Enter destination", Toast.LENGTH_LONG).show();
                 }
 
 
@@ -289,7 +319,7 @@ public class RoutingActivity extends AppCompatActivity implements OnItemClickLis
 
                 //nearbyHospArray = new ArrayList<String>();
                 //hospitalNameToLatLngMap = new HashMap<String, LatLng>();
-                Toast.makeText(RoutingActivity.this,"Hospitals", Toast.LENGTH_LONG).show();
+                Toast.makeText(RoutingActivity.this, "Hospitals", Toast.LENGTH_LONG).show();
 
                 getNearby("hospital");
 
@@ -304,7 +334,7 @@ public class RoutingActivity extends AppCompatActivity implements OnItemClickLis
 
                 //nearbyPoliceArray = new ArrayList<String>();
                 //policeNameToLatLngMap = new HashMap<String, LatLng>();
-                Toast.makeText(RoutingActivity.this,"Police Stations", Toast.LENGTH_LONG).show();
+                Toast.makeText(RoutingActivity.this, "Police Stations", Toast.LENGTH_LONG).show();
 
                 getNearby("police");
 
@@ -313,22 +343,29 @@ public class RoutingActivity extends AppCompatActivity implements OnItemClickLis
         });
 
 
+    }
+
+
+    void testFirebase() {
+        long timemillis = System.currentTimeMillis();
+        databaseRef = database.getReference();
+        Feedback feedback = new Feedback(timemillis, "Koti", "2.34,1.456", "Banjara", "2.34,6.73", "1.23,12.34", 4, true, false, true, false);
+        databaseRef.push().setValue(feedback);
 
 
     }
-
 
 
     /**
      * Start: Methods and classes for getting nearby locations
      */
 
-    void getNearby( String placeType) {
+    void getNearby(String placeType) {
         getDirection.setVisibility(View.INVISIBLE);
 
         mMap.clear();
 
-        if(hashMapMarker.get("current")!=null){
+        if (hashMapMarker.get("current") != null) {
             mMap.addMarker(hashMapMarker.get("current"));
         }
         LatLng latLng = new LatLng(latitude, longitude);
@@ -351,12 +388,14 @@ public class RoutingActivity extends AppCompatActivity implements OnItemClickLis
 
     }
 
-    /** A method to download json data from url */
-    private String downloadUrl(String strUrl) throws IOException{
+    /**
+     * A method to download json data from url
+     */
+    private String downloadUrl(String strUrl) throws IOException {
         String data = "";
         InputStream iStream = null;
         HttpURLConnection urlConnection = null;
-        try{
+        try {
             URL url = new URL(strUrl);
 
             // Creating an http connection to communicate with url
@@ -370,10 +409,10 @@ public class RoutingActivity extends AppCompatActivity implements OnItemClickLis
 
             BufferedReader br = new BufferedReader(new InputStreamReader(iStream));
 
-            StringBuffer sb  = new StringBuffer();
+            StringBuffer sb = new StringBuffer();
 
             String line = "";
-            while( ( line = br.readLine())  != null){
+            while ((line = br.readLine()) != null) {
                 sb.append(line);
             }
 
@@ -381,9 +420,9 @@ public class RoutingActivity extends AppCompatActivity implements OnItemClickLis
 
             br.close();
 
-        }catch(Exception e){
+        } catch (Exception e) {
             Log.d("Exception dwnloadng url", e.toString());
-        }finally{
+        } finally {
             iStream.close();
             urlConnection.disconnect();
         }
@@ -391,7 +430,9 @@ public class RoutingActivity extends AppCompatActivity implements OnItemClickLis
         return data;
     }
 
-    /** A class, to download Google Places */
+    /**
+     * A class, to download Google Places
+     */
     private class PlacesTask extends AsyncTask<String, Integer, String> {
 
         String data = null;
@@ -399,17 +440,17 @@ public class RoutingActivity extends AppCompatActivity implements OnItemClickLis
         // Invoked by execute() method of this object
         @Override
         protected String doInBackground(String... url) {
-            try{
+            try {
                 data = downloadUrl(url[0]);
-            }catch(Exception e){
-                Log.d("Background Task",e.toString());
+            } catch (Exception e) {
+                Log.d("Background Task", e.toString());
             }
             return data;
         }
 
         // Executed after the complete execution of doInBackground() method
         @Override
-        protected void onPostExecute(String result){
+        protected void onPostExecute(String result) {
             ParserTask parserTask = new ParserTask();
 
             // Start parsing the Google places in JSON format
@@ -419,38 +460,40 @@ public class RoutingActivity extends AppCompatActivity implements OnItemClickLis
 
     }
 
-    /** A class to parse the Google Places in JSON format */
-    private class ParserTask extends AsyncTask<String, Integer, List<HashMap<String,String>>>{
+    /**
+     * A class to parse the Google Places in JSON format
+     */
+    private class ParserTask extends AsyncTask<String, Integer, List<HashMap<String, String>>> {
 
         JSONObject jObject;
 
         // Invoked by execute() method of this object
         @Override
-        protected List<HashMap<String,String>> doInBackground(String... jsonData) {
+        protected List<HashMap<String, String>> doInBackground(String... jsonData) {
 
             List<HashMap<String, String>> places = null;
             PlaceJSONParser placeJsonParser = new PlaceJSONParser();
 
-            try{
+            try {
                 jObject = new JSONObject(jsonData[0]);
 
                 /** Getting the parsed data as a List construct */
                 places = placeJsonParser.parse(jObject);
 
-            }catch(Exception e){
-                Log.d("Exception",e.toString());
+            } catch (Exception e) {
+                Log.d("Exception", e.toString());
             }
             return places;
         }
 
         // Executed after the complete execution of doInBackground() method
         @Override
-        public void onPostExecute(List<HashMap<String,String>> list){
+        public void onPostExecute(List<HashMap<String, String>> list) {
 
             // Clears all the existing markers
             // mMap.clear();
             //count=count+list.size();
-            for(int i=0;i<list.size();i++){
+            for (int i = 0; i < list.size(); i++) {
 
                 // Creating a marker
                 MarkerOptions markerOptions = new MarkerOptions();
@@ -488,8 +531,6 @@ public class RoutingActivity extends AppCompatActivity implements OnItemClickLis
     /**
      * End : Methods and classes to get nearby locations
      */
-
-
 
 
     /**
@@ -549,9 +590,9 @@ public class RoutingActivity extends AppCompatActivity implements OnItemClickLis
             Log.e(LOG_TAG, "Cannot process JSON results", e);
         }
 
-        if(currLoc!=""){
+        if (currLoc != "") {
 
-            resultList.add(0,currLoc);
+            resultList.add(0, currLoc);
         }
 
         return resultList;
@@ -609,7 +650,6 @@ public class RoutingActivity extends AppCompatActivity implements OnItemClickLis
      **/
 
 
-
     /**
      * Method for getting source and dest after getDirections is clicked
      **/
@@ -661,16 +701,16 @@ public class RoutingActivity extends AppCompatActivity implements OnItemClickLis
 
         LatLng latLng2 = null;
         try {
-            if(location2!="") {
+            if (location2 != "") {
                 latLng2 = getLatLng(location2);
             }
         } catch (IOException e) {
             e.printStackTrace();
         }
 
-        if(latLng2!=null) {
+        if (latLng2 != null) {
 
-            if(destMarker != null){
+            if (destMarker != null) {
                 mMap.clear();
                 hashMapMarker.remove("destination");
                 addAllMarkers();
@@ -678,7 +718,7 @@ public class RoutingActivity extends AppCompatActivity implements OnItemClickLis
 
             }
 
-            if(destMarker == null) {
+            if (destMarker == null) {
 
                 MarkerOptions markerOptions = new MarkerOptions();
                 markerOptions.position(latLng2);
@@ -700,18 +740,17 @@ public class RoutingActivity extends AppCompatActivity implements OnItemClickLis
     }
 
 
-
     /**
      * Method for adding current location, source and destination markers to map
      **/
-    public void addAllMarkers(){
-        if(hashMapMarker.get("source")!=null){
+    public void addAllMarkers() {
+        if (hashMapMarker.get("source") != null) {
             mMap.addMarker(hashMapMarker.get("source"));
         }
-        if(hashMapMarker.get("destination")!=null){
+        if (hashMapMarker.get("destination") != null) {
             mMap.addMarker(hashMapMarker.get("destination"));
         }
-        if(hashMapMarker.get("current")!=null){
+        if (hashMapMarker.get("current") != null) {
             mMap.addMarker(hashMapMarker.get("current"));
         }
 
@@ -725,7 +764,7 @@ public class RoutingActivity extends AppCompatActivity implements OnItemClickLis
         Geocoder geocoder = new Geocoder(this);
         List<Address> addresses;
         addresses = geocoder.getFromLocationName(location, 1);
-        if(addresses.size() > 0) {
+        if (addresses.size() > 0) {
             double resLat = addresses.get(0).getLatitude();
             double reslng = addresses.get(0).getLongitude();
 
@@ -762,12 +801,11 @@ public class RoutingActivity extends AppCompatActivity implements OnItemClickLis
     }
 
 
-
     private boolean CheckGooglePlayServices() {
         GoogleApiAvailability googleAPI = GoogleApiAvailability.getInstance();
         int result = googleAPI.isGooglePlayServicesAvailable(this);
-        if(result != ConnectionResult.SUCCESS) {
-            if(googleAPI.isUserResolvableError(result)) {
+        if (result != ConnectionResult.SUCCESS) {
+            if (googleAPI.isUserResolvableError(result)) {
                 googleAPI.getErrorDialog(this, result,
                         0).show();
             }
@@ -816,49 +854,73 @@ public class RoutingActivity extends AppCompatActivity implements OnItemClickLis
         // Mode
         String mode = "mode=" + directionMode;
         // Building the parameters to the web service
-        String parameters = str_origin + "&" + str_dest +"&alternatives=true"+ "&" + mode;
+        String parameters = str_origin + "&" + str_dest + "&alternatives=true" + "&" + mode;
         // Output format
         String output = "json";
         // Building the url to the web service
-                                                                                                               /**API KEy **/
+        /**API KEy **/
         String url = "https://maps.googleapis.com/maps/api/directions/" + output + "?" + parameters + "&key=" + getString(R.string.google_maps_key);
         return url;
+    }
+
+    public void AddData(String source, Marker sourceMark, String dest, Marker destMark, String waypoints) {
+        String sourcePoint = "" + sourceMark.getPosition().latitude + "," + sourceMark.getPosition().longitude;
+        String destPoint = "" + destMark.getPosition().latitude + "," + destMark.getPosition().longitude;
+        boolean insertData = mDatabaseHelper.addData(source, sourcePoint, dest, destPoint, waypoints);
+
+        if (!insertData) {
+            toastMessage("Something went wrong");
+        }
+    }
+
+
+    private void toastMessage(String message) {
+        Toast.makeText(this, message, Toast.LENGTH_LONG).show();
     }
 
     @Override
     public void onTaskDone(int count, List<PolylineOptions> poly) {
 
-        mMap.setOnPolylineClickListener(new GoogleMap.OnPolylineClickListener()
-        {
+
+        mMap.setOnPolylineClickListener(new GoogleMap.OnPolylineClickListener() {
             @Override
-            public void onPolylineClick(Polyline polyline)
-            {
+            public void onPolylineClick(Polyline polyline) {
                 polyline.setColor(Color.MAGENTA);
 
+
                 //Getting the waypoints for navigation
-                List<LatLng> listWay  = polyline.getPoints();
-                int iter, wayIndex=0;
+                List<LatLng> listWay = polyline.getPoints();
+                int iter, wayIndex = 0;
 
                 String[] waypoints = new String[8];
                 LatLng point;
-                int interval = listWay.size()/9;
-                for(iter=interval;iter<listWay.size();iter+=interval){
+                int interval = listWay.size() / 9;
+                for (iter = interval; iter < listWay.size(); iter += interval) {
                     point = listWay.get(iter);
-                    waypoints[wayIndex]= "" + point.latitude + "," + point.longitude ;
+                    waypoints[wayIndex] = "" + point.latitude + "," + point.longitude;
                     wayIndex++;
-                    if(wayIndex==8 || iter >= listWay.size())
+                    if (wayIndex == 8)
                         break;
                 }
 
-                String waypointStr = String.join("|", waypoints);
+                String waypointStr = "";
+                int iWay = 1;
+                waypointStr += waypoints[0];
+                while (iWay < waypoints.length) {
+                    waypointStr += "|" + waypoints[iWay];
+                    iWay++;
+                }
+
 
                 if (sourceMarker != null && destMarker != null) {
+                    AddData(source, sourceMarker, destination, destMarker, waypointStr);
                     String uri = "https://www.google.com/maps/dir/?api=1&origin=" + sourceMarker.getPosition().latitude + "," + sourceMarker.getPosition().longitude + "&destination=" + latitude + "," + longitude + "&waypoints=" + waypointStr + "&travelmode=driving&dir_action=navigate";
                     Intent intent = new Intent(android.content.Intent.ACTION_VIEW, Uri.parse(uri));
                     intent.setClassName("com.google.android.apps.maps", "com.google.android.maps.MapsActivity");
                     startActivity(intent);
                 }
-                if(sourceMarker == null && destMarker!=null){
+                if (sourceMarker == null && destMarker != null) {
+                    AddData(source, mCurrLocationMarker, destination, destMarker, waypointStr);
                     String uri = "https://www.google.com/maps/dir/?api=1&origin=" + mCurrLocationMarker.getPosition().latitude + "," + mCurrLocationMarker.getPosition().longitude + "&destination=" + latitude + "," + longitude + "&waypoints=" + waypointStr + "&travelmode=driving&dir_action=navigate";
                     Intent intent = new Intent(android.content.Intent.ACTION_VIEW, Uri.parse(uri));
                     intent.setClassName("com.google.android.apps.maps", "com.google.android.maps.MapsActivity");
@@ -869,67 +931,92 @@ public class RoutingActivity extends AppCompatActivity implements OnItemClickLis
         });
 
 
-        int i, maxIndex=0;
-        int[] estCount =  new int[count];
-        for(i=0;i<count;i++){
-            if(poly.get(i)!=null){
-                estCount[i] = (getNumberOfEstablishmentsForRoute((PolylineOptions)poly.get(i)));
-                if(estCount[maxIndex]<estCount[i])
-                    maxIndex = i;
-            }
+        int i, maxIndex = 0;
+
+        Log.d("Number of routes", "before getNumber" + count);
+
+        try {
+            lock.lock();
         }
-        for(i=0;i<count;i++){
-            if(maxIndex != i) {
-                PolylineOptions polylineOptions = poly.get(i);
-                polylineOptions.color(Color.RED);
-                Polyline polyline = mMap.addPolyline(polylineOptions);
-                polyline.setClickable(true);
-            }
+        catch(InterruptedException ie){
+            Log.d("Exception", "InterruptedException has occured" );
+        }
+
+        for (i = 0; i < count; i++) {
+            estCount[i] = -1;
+            if (poly.get(i) != null) {
+                getNumberOfEstablishmentsForRoute((PolylineOptions) poly.get(i), i);
+                if (estCount[maxIndex] < estCount[i])
+                    maxIndex = i;
 
             }
+            if(i == count-1)
+                lock.unlock();
+        }
+
+        if (!lock.isLocked){
+            for (i = 0; i < count; i++) {
+                if (maxIndex != i) {
+
+                    PolylineOptions polylineOptions = poly.get(i);
+                    polylineOptions.color(Color.RED);
+                    polylineOptions.width(9);
+                    Polyline polyline = mMap.addPolyline(polylineOptions);
+                    polyline.setClickable(true);
+                }
+
+            }
+
         PolylineOptions polylineOptions = poly.get(maxIndex);
         polylineOptions.color(Color.BLUE);
+        polylineOptions.width(13);
         Polyline polyline = mMap.addPolyline(polylineOptions);
         polyline.setClickable(true);
 
-        }
+    }
 
+}
 
     /**
      * Start: Methods and classes for getting nearby locations along a route
      */
-    int masterCount = 0, localCount=0;
 
-    int getNumberOfEstablishmentsForRoute(PolylineOptions polylineOptions) {
+
+
+    void getNumberOfEstablishmentsForRoute(PolylineOptions polylineOptions, int index) {
+        counter.reset();
         getDirection.setVisibility(View.INVISIBLE);
-        int i, j;
-        masterCount = 0;
+        int i;
         LatLng currentPoint;
         List<LatLng> points = polylineOptions.getPoints();
 
+        counter.reset();
+        counter.count = 0;
+        Log.d("Counter reset", "counterVal = "+counter.count);
         //for (j = 0; j < mPlaceType.length; j++){
-            for (i = 0; i < points.size(); i = i + 7) {
-                localCount = 0;
+            for (i = 0; i < points.size(); i = i + 6) {
                 currentPoint = (LatLng) points.get(i);
                 StringBuilder sb = new StringBuilder("https://maps.googleapis.com/maps/api/place/nearbysearch/json?");
                 sb.append("location=" + currentPoint.latitude + "," + currentPoint.longitude);
                 sb.append("&radius=50");
-                sb.append("&types=" + mPlaceType[0]);   //Only for hospitals
+                sb.append("&types=" + mPlaceType[i]);   //Only for hospitals
                 sb.append("&sensor=true");
                 sb.append("&key=" + getString(R.string.google_maps_key));                                                 /** API KEY **/
                 sb.append("&opennow=true");
 
                 // Creating a new non-ui thread task to download json data
-                PlacesTaskNonUI placesTaskNonUI = new PlacesTaskNonUI();
+                PlacesTaskNonUI placesTaskNonUI = new PlacesTaskNonUI(index);
 
                 // Invokes the "doInBackground()" method of the class PlaceTask
                 placesTaskNonUI.execute(sb.toString());
-                masterCount += localCount;
-                Log.d("mastercount", "value: " + masterCount);
+                if(i == points.size()-1) {
+                    counter.count = 0;
+
+                }
+
             }
-            Log.d("master count final", "value: " + masterCount);
-            return masterCount;
-            //return Counter.getCount();
+
+
         }
     //}
 
@@ -976,7 +1063,11 @@ public class RoutingActivity extends AppCompatActivity implements OnItemClickLis
 
         /** A class, to download Google Places */
         private class PlacesTaskNonUI extends AsyncTask<String, Integer, String> {
+            int index;
 
+            public PlacesTaskNonUI(int i ){
+                this.index = i;
+            }
 
             String data = null;
 
@@ -994,11 +1085,13 @@ public class RoutingActivity extends AppCompatActivity implements OnItemClickLis
             // Executed after the complete execution of doInBackground() method
             @Override
             protected void onPostExecute(String result) {
-                ParserTaskNonUI parserTaskNonUI = new ParserTaskNonUI();
+                ParserTaskNonUI parserTaskNonUI = new ParserTaskNonUI(index);
 
                 // Start parsing the Google places in JSON format
                 // Invokes the "doInBackground()" method of the class ParseTask
                 parserTaskNonUI.execute(result);
+
+
             }
 
 
@@ -1006,8 +1099,12 @@ public class RoutingActivity extends AppCompatActivity implements OnItemClickLis
 
         /** A class to parse the Google Places in JSON format */
         private class ParserTaskNonUI extends AsyncTask<String, Integer, List<HashMap<String, String>>> {
-
             JSONObject jObject;
+            int index;
+
+            public ParserTaskNonUI(int i ){
+                this.index = i;
+            }
 
             // Invoked by execute() method of this object
             @Override
@@ -1033,12 +1130,12 @@ public class RoutingActivity extends AppCompatActivity implements OnItemClickLis
             @Override
             public void onPostExecute(List<HashMap<String, String>> list) {
 
-
-                localCount= list.size();
-                //Counter.update(list.size());
-                Log.d("InParserNonUI", "value: " + localCount);
+                counter.add(list.size());
+                estCount[index] = counter.count;
+                Log.d("InParserNonUI", "value: " + estCount[index] + " in " + index + "counter="+ counter.count);
 
             }
+
 
         }
 
@@ -1079,7 +1176,7 @@ public class RoutingActivity extends AppCompatActivity implements OnItemClickLis
         markerOptions.position(latLng);
         markerOptions.draggable(true);
         markerOptions.title("Current Position");
-        markerOptions.icon(BitmapDescriptorFactory.defaultMarker(BitmapDescriptorFactory.HUE_MAGENTA));
+        markerOptions.icon(BitmapDescriptorFactory.defaultMarker(BitmapDescriptorFactory.HUE_ROSE));
         mCurrLocationMarker = mMap.addMarker(markerOptions);
         hashMapMarker.put("current",markerOptions);
         //sourceMarker = mCurrLocationMarker;
